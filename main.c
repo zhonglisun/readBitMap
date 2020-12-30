@@ -58,12 +58,17 @@ void printType(const int t);
 void ShowBitmapInfo(BITMAPHEADER* pBitmapHeader);
 int OpenBitmapFile(const char* szFileName, FILE** ppFile);
 int ReadHeaderInfo(FILE* pFile, BITMAPHEADER* pBitmapHeader, int dumpInfo);
-int ReadImageData(FILE* pFile, BITMAPHEADER* pBitmapHeader, BYTE** ppBuffer, BUFFERDIMS* pBufferDims);
+int ReadImageData(FILE* pFile, BITMAPHEADER* pBitmapHeader, BYTE** ppBuffer, size_t *bufferSize, BUFFERDIMS* pBufferDims);
 int ReadBitmapFile(const char* szFileName, BYTE** ppBuffer, BUFFERDIMS* pBufferDims, int dumpInfo);
+int DownScaledImage(BYTE* pImageData, size_t bufferSize, BITMAPHEADER* pBitmapHeader, BUFFERDIMS* pBufferDims);
+
+
 int main(int argc, char *argv[]) {
 	FILE *pFile = NULL;
     BYTE *pImageData = NULL;
     DWORD bOffSize = 0;
+    size_t bufferSize = 0;
+    
     int i = 0;
     BITMAPHEADER bitMapHeader;
     BUFFERDIMS bufferDims;
@@ -74,13 +79,12 @@ int main(int argc, char *argv[]) {
 	    ReadHeaderInfo(pFile, &bitMapHeader, 1 );
 		bOffSize = bitMapHeader.bfOffBits;
 		printf("off size %d \n", bOffSize);
-		ReadImageData(pFile, &bitMapHeader, &pImageData, &bufferDims);
-		for(i = 0; i < 100; i++)
-		{
-			printf(" %d ", pImageData[i]);
-			if( i > 0 && i % 10 == 0)
-			    printf("\n");
-		}
+		ReadImageData(pFile, &bitMapHeader, &pImageData, &bufferSize, &bufferDims);
+//		for(i = 0; i < bufferSize; i++)
+//		{
+//			printf(" %d ", pImageData[i]);
+//		}
+        DownScaledImage(pImageData, bufferSize, &bitMapHeader, &bufferDims);
 		if(pImageData != NULL)
 		   free(pImageData);
 		fclose(pFile);
@@ -119,7 +123,7 @@ int ReadHeaderInfo(FILE* pFile, BITMAPHEADER* pBitmapHeader, int dumpInfo)
  
  	return 1;
 }
-int ReadImageData(FILE* pFile, BITMAPHEADER* pBitmapHeader, BYTE** ppBuffer, BUFFERDIMS* pBufferDims)
+int ReadImageData(FILE* pFile, BITMAPHEADER* pBitmapHeader, BYTE** ppBuffer, size_t *bufferSize, BUFFERDIMS* pBufferDims)
 {
 	int i = 0;
 	pBufferDims->width = pBitmapHeader->biWidth;
@@ -149,10 +153,11 @@ int ReadImageData(FILE* pFile, BITMAPHEADER* pBitmapHeader, BYTE** ppBuffer, BUF
 		}
 	}
  
-	const int nLineBytes = ((pBitmapHeader->biWidth)* (pBitmapHeader->biBitCount) + 31) / 8;
-	const size_t bufferSize = nLineBytes*(pBitmapHeader->biHeight);
-	printf("Trying to allocate %d bytes memory...",bufferSize);
-	*ppBuffer = (BYTE*)malloc(bufferSize);
+//	const int nLineBytes = ((pBitmapHeader->biWidth)* (pBitmapHeader->biBitCount) + 31) / 8;
+	const int nLineBytes = ((pBitmapHeader->biWidth)* (pBitmapHeader->biBitCount)) / 8;
+	*bufferSize = nLineBytes*(pBitmapHeader->biHeight);
+	printf("Trying to allocate %d bytes memory...",*bufferSize);
+	*ppBuffer = (BYTE*)malloc(*bufferSize);
 	if (*ppBuffer == NULL)
 	{
 		printf("Failed.\n");
@@ -161,11 +166,90 @@ int ReadImageData(FILE* pFile, BITMAPHEADER* pBitmapHeader, BYTE** ppBuffer, BUF
 	}
  
 	printf("OK.\nPrepare to load image data...\n");
-	fread(*ppBuffer, bufferSize, 1, pFile);
+	fread(*ppBuffer, *bufferSize, 1, pFile);
 	printf("Image data loaded.\n");
  
 	return 1;
 }
+
+int DownScaledImage(BYTE* pImageData, size_t bufferSize, BITMAPHEADER* pBitmapHeader, BUFFERDIMS* pBufferDims)
+{
+	FILE *pFileWrite = NULL;
+	size_t downScaledImageDataSize = 0;
+	BYTE* pDownScaledImageData = NULL, *currentLine = NULL, *nextLine = NULL;
+	int row = 0, col = 0, index = 0;
+	int red = 0, green = 0, blue = 0;
+	BITMAPHEADER DownScaledImageHeader;
+	
+	
+	DownScaledImageHeader = *pBitmapHeader;
+	if ( pBitmapHeader->biHeight % 2 == 0 )
+	   DownScaledImageHeader.biHeight = pBitmapHeader->biHeight / 2;
+	else
+	   DownScaledImageHeader.biHeight = ( pBitmapHeader->biHeight + 1 ) / 2;
+    if ( pBitmapHeader->biWidth % 2 == 0 )
+	   DownScaledImageHeader.biWidth = pBitmapHeader->biWidth / 2;
+	else
+	   DownScaledImageHeader.biWidth = ( pBitmapHeader->biWidth + 1 ) / 2;
+	
+	downScaledImageDataSize = ( DownScaledImageHeader.biWidth * DownScaledImageHeader.biBitCount ) / 8;
+	downScaledImageDataSize = downScaledImageDataSize * DownScaledImageHeader.biHeight;
+	pDownScaledImageData = (BYTE* )malloc(downScaledImageDataSize);
+	for( row = 0; row < pBitmapHeader->biHeight; row++)
+	{
+		currentLine = pImageData + row * pBitmapHeader->biWidth * 3;
+		if ( row + 1 < pBitmapHeader->biHeight)
+		   nextLine = pImageData + ( row + 1)  * pBitmapHeader->biWidth * 3;
+
+		while(col < pBitmapHeader->biWidth * 3 )
+		{
+			if ( row + 1 < pBitmapHeader->biHeight )
+			{
+				//red first pixe     econd pixel          third pixel      fourth pixel
+				if( col + 3 < pBitmapHeader->biWidth * 3)
+			       pDownScaledImageData[index++] = ( currentLine[col] + currentLine[col + 3] +
+				        nextLine[col] + nextLine[col + 3] ) / 4;
+				else
+				   pDownScaledImageData[index++] = ( currentLine[col] + nextLine[col]  ) / 2;
+//				//green
+//				green = ( currentLine[col + 1] + currentLine[col + 4] +
+//				          nextLine[col + 1] + nextLine[col + 4] ) / 4;
+//				//blue
+//				blue = ( currentLine[col + 2] + currentLine[col + 5] +
+//				         nextLine[col + 2] + nextLine[col + 5] ) / 4;
+//				col += 6;// offsize two pixel 3(Byte) * 2
+			}
+			else
+			{
+				//red first pixe     econd pixel
+				if( col + 3 < pBitmapHeader->biWidth * 3)     
+			       pDownScaledImageData[index++] = ( currentLine[col] + currentLine[col + 3] ) / 2;
+			    else
+			       pDownScaledImageData[index++] = currentLine[col] ;
+				//green
+//				green = ( currentLine[col + 1] + currentLine[col + 4] ) / 2;
+//				//blue
+//				blue = (currentLine[col + 2] + currentLine[col + 5] ) / 2;
+//				col += 6;// offsize two pixel 3(Byte) * 2
+			}
+			if ( col % 3 ==  2 )
+			   col += 3 + 1;
+			else
+			   col++;
+		}
+        row++;
+	}
+//	pFileWrite = fopen("downscaled.bmp", "w+");
+//	if( pFileWrite != NULL )
+//	{
+//		fwrite( &pDownScaledImageData ,downScaledImageDataSize, 1, pFileWrite);
+//		fclose(pFileWrite);
+//	}
+    if(pDownScaledImageData != NULL)
+       free(pDownScaledImageData);
+	return 0;
+}
+
 void ShowBitmapInfo(BITMAPHEADER* pBitmapHeader)
 {
 	printf("\n------------------- INFORMATION -------------------\n");
